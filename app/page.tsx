@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import { doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
+import { auth, db } from "./firebase";
 
 type Status="免費試用"|"付費評估中"|"使用中"|"準備取消"|"已提出取消"|"等待停止續訂"|"已確認取消"|"已到期"|"暫停"|"待確認";
 type Cycle="月繳"|"季繳"|"年繳"|"免費試用"|"付費試用"|"先訂一個月評估"|"用量計費"|"一次性買斷"|"積分包"|"加購項目"|"稅金或國外交易手續費"|"免費方案"|"待確認";
@@ -14,6 +17,7 @@ const seed:Sub[]=[
  {id:2,name:"Example Video",initials:"V",color:"#d94f4f",plan:"標準方案",category:"串流影音",price:300,cycle:"月繳",nextDate:"2026-08-21",safeDate:"2026-08-18",payment:"信用卡",status:"使用中",usage:"中",unique:false,purpose:["影音娛樂"]},
  {id:3,name:"Example Trial",initials:"T",color:"#4466aa",plan:"免費試用",category:"生產力與協作",price:200,cycle:"免費試用",nextDate:"2026-08-08",safeDate:"2026-08-05",payment:"信用卡",status:"免費試用",usage:"低",unique:false,purpose:["功能評估"]},
 ];
+const cleanItems=(items:Sub[])=>JSON.parse(JSON.stringify(items)) as Sub[];
 const PLAN_OPTIONS=["免費方案","Basic","Plus","Pro","Premium","月租方案","標準方案","高級方案","無廣告方案","年度方案","一次性購買","其他"];
 const nav=[{n:"總覽",m:"01"},{n:"訂閱",m:"02"},{n:"試用與評估",m:"03"},{n:"行動中心",m:"04"},{n:"使用價值",m:"05"},{n:"報表",m:"06"},{n:"匯入",m:"07"}];
 const money=(n:number)=>new Intl.NumberFormat("zh-TW",{style:"currency",currency:"TWD",maximumFractionDigits:0}).format(n);
@@ -24,28 +28,35 @@ const recommendation=(i:Sub)=>{const resubs=(i.history||[]).filter(h=>h.type==="
 
 export default function Home(){
  const [items,setItems]=useState<Sub[]>(seed),[page,setPage]=useState("總覽"),[selected,setSelected]=useState<number|null>(null),[showAdd,setShowAdd]=useState(false),[editing,setEditing]=useState<Sub|null>(null),[toast,setToast]=useState(""),[query,setQuery]=useState(""),[filter,setFilter]=useState("全部"),[menu,setMenu]=useState(false);
+ const [user,setUser]=useState<User|null>(null),[authLoading,setAuthLoading]=useState(true),[cloudReady,setCloudReady]=useState(false),[cloudState,setCloudState]=useState<"連線中"|"已同步"|"待同步">("連線中");
  const [csv,setCsv]=useState<{date:string;merchant:string;amount:number;verdict:string}[]>([]); const fileRef=useRef<HTMLInputElement>(null);
- useEffect(()=>{const s=localStorage.getItem("subscope-public-items");if(s){try{setItems(JSON.parse(s))}catch{}}},[]);
- useEffect(()=>localStorage.setItem("subscope-public-items",JSON.stringify(items)),[items]);
+ const itemsRef=useRef(items),remoteJsonRef=useRef("");
+ useEffect(()=>{itemsRef.current=items},[items]);
+ useEffect(()=>{const s=localStorage.getItem("subscope-items")||localStorage.getItem("subscope-public-items");if(s){try{setItems(JSON.parse(s))}catch{}}return onAuthStateChanged(auth,next=>{setUser(next);setAuthLoading(false);setCloudReady(false);setCloudState("連線中")})},[]);
+ useEffect(()=>{if(!user)return;const stateRef=doc(db,"users",user.uid,"apps","subscope");return onSnapshot(stateRef,async snap=>{if(snap.exists()&&Array.isArray(snap.data().items)){const remote=cleanItems(snap.data().items as Sub[]),json=JSON.stringify(remote);remoteJsonRef.current=json;if(JSON.stringify(itemsRef.current)!==json)setItems(remote);setCloudState("已同步")}else{const local=cleanItems(itemsRef.current);remoteJsonRef.current=JSON.stringify(local);await setDoc(stateRef,{items:local,updatedAt:serverTimestamp()},{merge:true});setCloudState("已同步")}setCloudReady(true)},()=>{setCloudReady(false);setCloudState("待同步");say("雲端同步暫時無法連線")})},[user]);
+ useEffect(()=>localStorage.setItem("subscope-items",JSON.stringify(items)),[items]);
+ useEffect(()=>{if(!user||!cloudReady)return;const cleaned=cleanItems(items),json=JSON.stringify(cleaned);if(json===remoteJsonRef.current)return;setCloudState("連線中");setDoc(doc(db,"users",user.uid,"apps","subscope"),{items:cleaned,updatedAt:serverTimestamp()},{merge:true}).then(()=>{remoteJsonRef.current=json;setCloudState("已同步")}).catch(()=>{setCloudState("待同步");say("變更已保留在本機，稍後再同步")})},[items,user,cloudReady]);
  const say=(s:string)=>{setToast(s);setTimeout(()=>setToast(""),2400)};
+ const login=async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider());say("已登入，正在同步歷史資料")}catch{say("登入未完成，請再試一次")}};
+ const logout=async()=>{await signOut(auth);setCloudReady(false);say("已登出；本機資料仍保留")};
  const active=items.filter(i=>!["已確認取消","已到期"].includes(i.status));
  const monthly=active.reduce((a,i)=>a+monthlyCost(i),0), annual=monthly*12;
  const current=items.find(i=>i.id===selected)||null;
  const list=useMemo(()=>items.filter(i=>(filter==="全部"||i.category===filter||i.status===filter||i.cycle===filter)&&(i.name+i.plan+i.payment).toLowerCase().includes(query.toLowerCase())),[items,filter,query]);
  const update=(id:number,status:Status)=>{setItems(v=>v.map(i=>i.id===id?{...i,status,decisionResolvedFor:i.nextDate||i.safeDate||"已處理"}:i));say(status==="已確認取消"?"已取消，下一期仍會替你核對":"本期決定已完成，已從待決定清單移除")};
  const openItem=(id:number)=>{setSelected(id);setPage("訂閱")};
- const deleteItem=(id:number)=>{const item=items.find(i=>i.id===id);if(!item||!window.confirm(`確定從這台裝置刪除「${item.name}」？`))return;setItems(v=>v.filter(i=>i.id!==id));setSelected(null);say("已刪除服務")};
+ const deleteItem=(id:number)=>{const item=items.find(i=>i.id===id);if(!item||!window.confirm(`確定刪除「${item.name}」？${user?"這項變更會同步到所有裝置。":""}`))return;setItems(v=>v.filter(i=>i.id!==id));setSelected(null);say("已刪除服務")};
  const parseCsv=async(file?:File)=>{if(!file)return;const lines=(await file.text()).trim().split(/\r?\n/),h=lines[0].split(",").map(x=>x.replaceAll('"',"").trim());const at=(ts:string[])=>h.findIndex(x=>ts.some(t=>x.toLowerCase().includes(t)));const di=at(["日期","date"]),mi=at(["商家","摘要","項目","merchant","description"]),ai=at(["金額","amount","支出"]);if(di<0||mi<0||ai<0)return say("找不到日期、商家或金額欄位");const re=/openai|chatgpt|claude|netflix|spotify|youtube|google|apple|adobe|notion|midjourney|tapnow|disney/i;const rows=lines.slice(1).map(l=>{const c=l.split(",").map(x=>x.replaceAll('"',"").trim()),merchant=c[mi]||"";return{date:c[di],merchant,amount:Math.abs(Number((c[ai]||"0").replace(/[^0-9.-]/g,""))),verdict:re.test(merchant)?"疑似訂閱":"略過"}}).filter(x=>x.merchant);setCsv(rows);say(`已找到 ${rows.filter(x=>x.verdict==="疑似訂閱").length} 筆候選`)};
 
  return <div className="shell">
   <aside className={`rail ${menu?"open":""}`}>
    <div className="wordmark"><span>S</span><strong>Subscope</strong></div>
    <nav>{nav.map(({n,m})=><button key={n} className={page===n?"on":""} onClick={()=>{setPage(n);setMenu(false)}}><em>{m}</em><span>{n}</span>{n==="行動中心"&&<i>{items.filter(i=>i.safeDate&&days(i.safeDate)<=14&&!['已確認取消','已到期','暫停'].includes(i.status)&&i.decisionResolvedFor!==(i.nextDate||i.safeDate||"已處理")).length}</i>}</button>)}</nav>
-   <div className="rail-bottom"><div className="privacy"><span>公開示範版</span><b>資料僅存在本機</b></div></div>
+   <div className="rail-bottom"><div className="privacy"><span>{user?"Firebase 雲端":"本機資料"}</span><b>{user?cloudState:"已保護"}</b></div></div>
   </aside>
 
   <main className="content">
-   <header className="topbar"><button className="mobile-menu" onClick={()=>setMenu(!menu)} aria-label="開啟選單"><span>☰</span></button><div><span className="overline">SUBSCRIPTION COMPANION</span><h1>{page}</h1></div><div className="top-actions"><button className="add-btn" onClick={()=>setShowAdd(true)}>＋ 新增</button></div></header>
+   <header className="topbar"><button className="mobile-menu" onClick={()=>setMenu(!menu)} aria-label="開啟選單"><span>☰</span></button><div><span className="overline">SUBSCRIPTION COMPANION</span><h1>{page}</h1></div><div className="top-actions"><button className="account-btn" onClick={user?logout:login} disabled={authLoading}>{authLoading?"確認登入…":user?`${user.displayName||"帳戶"} · 登出`:"使用 Google 登入"}</button><button className="add-btn" onClick={()=>setShowAdd(true)}>＋ 新增</button></div></header>
 
    {page==="總覽"&&<Today items={items} monthly={monthly} annual={annual} onOpen={openItem} onStatus={update}/>}
    {page==="訂閱"&&<MasterDetail title="所有服務" subtitle={`${active.length} 項服務 · 固定月費 ${money(monthly)}`} list={list} current={current} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} onSelect={setSelected} onStatus={update} setItems={setItems} onEdit={setEditing} onDelete={deleteItem} onClose={()=>setSelected(null)}/>} 
@@ -56,7 +67,7 @@ export default function Home(){
    {page==="匯入"&&<Import csv={csv} fileRef={fileRef} parseCsv={parseCsv}/>} 
   </main>
   {showAdd&&<div className="overlay" onClick={()=>setShowAdd(false)}><AddSheet onClose={()=>setShowAdd(false)} onAdd={i=>{setItems(v=>[...v,i]);setShowAdd(false);say("已加入 Subscope")}}/></div>}
-  {editing&&<div className="overlay" onClick={()=>setEditing(null)}><AddSheet initial={editing} onClose={()=>setEditing(null)} onAdd={updated=>{setItems(v=>v.map(i=>i.id===updated.id?updated:i));setEditing(null);say("變更已儲存在此裝置")}}/></div>}
+  {editing&&<div className="overlay" onClick={()=>setEditing(null)}><AddSheet initial={editing} onClose={()=>setEditing(null)} onAdd={updated=>{setItems(v=>v.map(i=>i.id===updated.id?updated:i));setEditing(null);say(user?"變更已儲存並同步":"變更已儲存在此裝置")}}/></div>}
   {toast&&<div className="toast">✓ {toast}</div>}
  </div>
 }
