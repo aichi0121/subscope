@@ -73,6 +73,7 @@ export default function Home(){
 }
 
 function Today({items,monthly,annual,userName,cloudReady,onOpen,onStatus}:{items:Sub[];monthly:number;annual:number;userName:string;cloudReady:boolean;onOpen:(n:number)=>void;onStatus:(id:number,s:Status)=>void}){
+ if(!userName||!cloudReady)return <div className="today-grid"><section className="today-main"><div className="intro"><p>{userName?`早安，${userName}`:"歡迎使用 Subscope"}</p><h2>{userName?"正在同步你的資料…":"登入後查看完整帳單"}</h2><span>{userName?"Firebase 完成載入後才會顯示金額，避免把本機資料誤認為雲端紀錄。":"登入後即可查看跨裝置同步的訂閱、行動帳單與扣款預估。"}</span></div><div className="decision-list"><div className="section-title"><h3>接下來</h3><span>等待雲端資料</span></div></div></section><aside className="today-side"><section className="cost-block"><span>固定訂閱月均</span><strong>—</strong><p>登入並完成同步後顯示</p></section></aside></div>;
  const urgent=items.filter(i=>i.safeDate&&!['已確認取消','已到期','暫停'].includes(i.status)&&i.decisionResolvedFor!==(i.nextDate||i.safeDate||"已處理")&&days(i.safeDate)<=14).sort((a,b)=>a.safeDate.localeCompare(b.safeDate));
  const carrierUpcoming=items.filter(i=>i.payment.includes("台灣大哥大")&&i.nextDate&&days(i.nextDate)>=0&&days(i.nextDate)<=30&&!['已確認取消','已到期','暫停'].includes(i.status)).reduce((a,i)=>a+i.price,0);
  const statementEntries=items.flatMap(i=>(i.history||[]).filter(h=>h.date>="2026-06-24"&&h.date<="2026-07-23").map(h=>({...h,name:i.name})));
