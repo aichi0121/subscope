@@ -58,7 +58,7 @@ export default function Home(){
   <main className="content">
    <header className="topbar"><button className="mobile-menu" onClick={()=>setMenu(!menu)} aria-label="開啟選單"><span>☰</span></button><div><span className="overline">SUBSCRIPTION COMPANION</span><h1>{page}</h1></div><div className="top-actions"><button className="account-btn" onClick={user?logout:login} disabled={authLoading}>{authLoading?"確認登入…":user?`${user.displayName||"帳戶"} · 登出`:"使用 Google 登入"}</button><button className="add-btn" onClick={()=>setShowAdd(true)}>＋ 新增</button></div></header>
 
-   {page==="總覽"&&<Today items={items} monthly={monthly} annual={annual} onOpen={openItem} onStatus={update}/>}
+   {page==="總覽"&&<Today items={items} monthly={monthly} annual={annual} userName={user?.displayName||""} cloudReady={cloudReady} onOpen={openItem} onStatus={update}/>} 
    {page==="訂閱"&&<MasterDetail title="所有服務" subtitle={`${active.length} 項服務 · 固定月費 ${money(monthly)}`} list={list} current={current} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} onSelect={setSelected} onStatus={update} setItems={setItems} onEdit={setEditing} onDelete={deleteItem} onClose={()=>setSelected(null)}/>} 
    {page==="試用與評估"&&<Trials items={items.filter(i=>["免費試用","付費評估中"].includes(i.status))} onOpen={openItem} onStatus={update}/>}
    {page==="行動中心"&&<ActionCenter items={items} onOpen={openItem} onStatus={update}/>}
@@ -72,13 +72,17 @@ export default function Home(){
  </div>
 }
 
-function Today({items,monthly,annual,onOpen,onStatus}:{items:Sub[];monthly:number;annual:number;onOpen:(n:number)=>void;onStatus:(id:number,s:Status)=>void}){
+function Today({items,monthly,annual,userName,cloudReady,onOpen,onStatus}:{items:Sub[];monthly:number;annual:number;userName:string;cloudReady:boolean;onOpen:(n:number)=>void;onStatus:(id:number,s:Status)=>void}){
  const urgent=items.filter(i=>i.safeDate&&!['已確認取消','已到期','暫停'].includes(i.status)&&i.decisionResolvedFor!==(i.nextDate||i.safeDate||"已處理")&&days(i.safeDate)<=14).sort((a,b)=>a.safeDate.localeCompare(b.safeDate));
+ const carrierUpcoming=items.filter(i=>i.payment.includes("台灣大哥大")&&i.nextDate&&days(i.nextDate)>=0&&days(i.nextDate)<=30&&!['已確認取消','已到期','暫停'].includes(i.status)).reduce((a,i)=>a+i.price,0);
+ const statementEntries=items.flatMap(i=>(i.history||[]).filter(h=>h.date>="2026-06-24"&&h.date<="2026-07-23").map(h=>({...h,name:i.name})));
+ const statementTotal=statementEntries.reduce((a,h)=>a+(h.type==="退款"?-h.amount:h.amount),0);
+ const chatgptTotal=statementEntries.filter(h=>h.name.startsWith("ChatGPT")).reduce((a,h)=>a+h.amount,0);
  return <div className="today-grid">
-  <section className="today-main"><div className="intro"><p>歡迎使用 Subscope</p><h2>這週有 <em>{urgent.length} 個決定</em><br/>值得你看一下。</h2><span>這是使用示範資料；你新增的內容只會保留在這台裝置。</span></div>
+  <section className="today-main"><div className="intro"><p>{userName?`早安，${userName}`:"歡迎使用 Subscope"}</p><h2>這週有 <em>{urgent.length} 個決定</em><br/>值得你看一下。</h2><span>{userName?(cloudReady?"不是每個重疊都該取消。先確認使用價值，再決定下一步。":"正在載入你的 Firebase 資料…"):"登入後即可查看跨裝置同步的完整訂閱與帳單資料。"}</span></div>
    <div className="decision-list"><div className="section-title"><h3>接下來</h3><span>依安全取消日排序</span></div>{urgent.map((i,index)=><article className="decision-row" key={i.id} onClick={()=>onOpen(i.id)}><div className="date"><span>{index===0?"今天":`${days(i.safeDate)} 天後`}</span><b>{new Date(i.safeDate).getDate()}</b><small>8 月</small></div><Logo item={i}/><div className="decision-copy"><strong>{i.name}</strong><p>{i.status==="免費試用"?`免費試用將轉為 ${money(i.price)}／月`:i.status==="付費評估中"?"第一個月評估期，請決定是否繼續":i.status==="準備取消"?"你已決定取消，尚待完成":"安全取消日即將到來"}</p><div>{i.purpose.map(p=><span key={p}>{p}</span>)}</div></div><b className="row-price">{money(i.price)}</b><div className="quick"><button onClick={e=>{e.stopPropagation();onStatus(i.id,"使用中")}}>保留</button><button onClick={e=>{e.stopPropagation();onStatus(i.id,"準備取消")}}>取消</button></div><ChevronRight/></article>)}</div>
   </section>
-  <aside className="today-side"><section className="cost-block"><span>固定訂閱月均</span><strong>{money(monthly)}<small>／月</small></strong><p>{money(annual)}／年 · 年費除以 12、季費除以 3，不代表本月會扣這筆錢</p><div className="cost-track"><i style={{width:"72%"}}/></div><small>這是成本比較數字，不是本月帳單</small></section></aside>
+  <aside className="today-side"><section className="cost-block"><span>固定訂閱月均</span><strong>{money(monthly)}<small>／月</small></strong><p>{money(annual)}／年 · 年費除以 12、季費除以 3，不代表本月會扣這筆錢</p><div className="cost-track"><i style={{width:"72%"}}/></div><small>這是成本比較數字，不是本月帳單</small></section>{userName&&cloudReady&&<><section className="statement-block"><span>行動帳單實際代收</span><b>{money(statementTotal)}</b><p>2026/6/24–7/23 · {statementEntries.length} 筆<br/>ChatGPT {chatgptTotal?`共 ${money(chatgptTotal)}`:"本期無紀錄"}</p></section><section className="carrier-block"><span>行動帳單未來 30 天預計代收</span><b>{money(carrierUpcoming)}</b><p>預估與已出帳分開；只加總未來 30 天內到期的項目。</p></section></>}</aside>
  </div>
 }
 
